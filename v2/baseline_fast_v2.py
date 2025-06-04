@@ -2,6 +2,8 @@ import sys
 from os.path import exists
 from pathlib import Path
 from red_gym_env_v2 import RedGymEnv
+import torch
+from custom_cnn import SmallCNN
 from stream_agent_wrapper import StreamWrapper
 from sb3_contrib.ppo_recurrent import RecurrentPPO
 from sb3_contrib.ppo_recurrent.policies import MultiInputLstmPolicy
@@ -40,6 +42,7 @@ if __name__ == "__main__":
     ep_length = 2048 * 80
     sess_id = "runs"
     sess_path = Path(sess_id)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     env_config = {
                 'headless': True, 'save_final_state': False, 'early_stop': False,
@@ -81,19 +84,36 @@ if __name__ == "__main__":
     else:
         file_name = sys.stdin.read().strip() #"runs/poke_26214400_steps"
 
-    train_steps_batch = 1024
-    policy_kwargs = dict(n_lstm_layers=1, lstm_hidden_size=256)
+    train_steps_batch = 2048
+    policy_kwargs = dict(
+        n_lstm_layers=2,
+        lstm_hidden_size=512,
+        features_extractor_class=SmallCNN,
+    )
     
     if exists(file_name + ".zip"):
         print("\nloading checkpoint")
-        model = RecurrentPPO.load(file_name, env=env)
+        model = RecurrentPPO.load(file_name, env=env, device=device)
         model.n_steps = train_steps_batch
         model.n_envs = num_cpu
         model.rollout_buffer.buffer_size = train_steps_batch
         model.rollout_buffer.n_envs = num_cpu
         model.rollout_buffer.reset()
     else:
-        model = RecurrentPPO(MultiInputLstmPolicy, env, verbose=1, n_steps=train_steps_batch, batch_size=512, n_epochs=4, gamma=0.997, ent_coef=0.01, learning_rate=2.5e-4, tensorboard_log=sess_path, policy_kwargs=policy_kwargs)
+        model = RecurrentPPO(
+            MultiInputLstmPolicy,
+            env,
+            verbose=1,
+            n_steps=train_steps_batch,
+            batch_size=512,
+            n_epochs=4,
+            gamma=0.997,
+            ent_coef=0.01,
+            learning_rate=2.5e-4,
+            tensorboard_log=sess_path,
+            policy_kwargs=policy_kwargs,
+            device=device,
+        )
     
     print(model.policy)
 

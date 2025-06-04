@@ -20,8 +20,11 @@ from pyboy.utils import WindowEvent
 from global_map import local_to_global, GLOBAL_MAP_SHAPE
 
 event_flags_start = 0xD747
-event_flags_end = 0xD87E # expand for SS Anne # old - 0xD7F6 
+event_flags_end = 0xD87E # expand for SS Anne # old - 0xD7F6
 museum_ticket = (0xD754, 0)
+
+# use GPU when available for curiosity module
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class RedGymEnv(Env):
     def __init__(self, config=None):
@@ -34,6 +37,8 @@ class RedGymEnv(Env):
         self.max_steps = config["max_steps"]
         self.save_video = config["save_video"]
         self.fast_video = config["fast_video"]
+        self.device = device
+        torch.backends.cudnn.benchmark = True
         self.frame_stacks = 3
         self.explore_weight = (
             1 if "explore_weight" not in config else config["explore_weight"]
@@ -190,6 +195,8 @@ class RedGymEnv(Env):
             nn.ReLU(),
             nn.Linear(128, 128),
         )
+        self.rnd_target.to(self.device)
+        self.rnd_predictor.to(self.device)
         self.rnd_optimizer = torch.optim.Adam(self.rnd_predictor.parameters(), lr=1e-4)
         self.intrinsic_reward = 0.0
 
@@ -413,7 +420,7 @@ class RedGymEnv(Env):
         self.recent_actions[0] = action
 
     def update_intrinsic_reward(self, screen):
-        x = torch.tensor(screen, dtype=torch.float32, device=self.rnd_predictor[0].weight.device) / 255.0
+        x = torch.tensor(screen, dtype=torch.float32, device=self.device) / 255.0
         x = x.view(1, -1)
         with torch.no_grad():
             target = self.rnd_target(x)

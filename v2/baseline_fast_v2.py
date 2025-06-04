@@ -3,7 +3,8 @@ from os.path import exists
 from pathlib import Path
 from red_gym_env_v2 import RedGymEnv
 from stream_agent_wrapper import StreamWrapper
-from stable_baselines3 import PPO
+from sb3_contrib.ppo_recurrent import RecurrentPPO
+from sb3_contrib.ppo_recurrent.policies import MultiInputLstmPolicy
 from stable_baselines3.common import env_checker
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.utils import set_random_seed
@@ -80,18 +81,19 @@ if __name__ == "__main__":
     else:
         file_name = sys.stdin.read().strip() #"runs/poke_26214400_steps"
 
-    train_steps_batch = ep_length // 64
+    train_steps_batch = 1024
+    policy_kwargs = dict(n_lstm_layers=1, lstm_hidden_size=256)
     
     if exists(file_name + ".zip"):
         print("\nloading checkpoint")
-        model = PPO.load(file_name, env=env)
+        model = RecurrentPPO.load(file_name, env=env)
         model.n_steps = train_steps_batch
         model.n_envs = num_cpu
         model.rollout_buffer.buffer_size = train_steps_batch
         model.rollout_buffer.n_envs = num_cpu
         model.rollout_buffer.reset()
     else:
-        model = PPO("MultiInputPolicy", env, verbose=1, n_steps=train_steps_batch, batch_size=512, n_epochs=1, gamma=0.997, ent_coef=0.01, tensorboard_log=sess_path)
+        model = RecurrentPPO(MultiInputLstmPolicy, env, verbose=1, n_steps=train_steps_batch, batch_size=512, n_epochs=4, gamma=0.997, ent_coef=0.01, learning_rate=2.5e-4, tensorboard_log=sess_path, policy_kwargs=policy_kwargs)
     
     print(model.policy)
 

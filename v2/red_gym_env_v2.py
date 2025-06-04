@@ -2,6 +2,10 @@ import uuid
 import json
 from pathlib import Path
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 import numpy as np
 from skimage.transform import downscale_local_mean
 import matplotlib.pyplot as plt
@@ -48,6 +52,8 @@ class RedGymEnv(Env):
         self.map_frame_writer = None
         self.reset_count = 0
         self.all_runs = []
+
+        self.init_rnd()
 
         self.essential_map_locations = {
             v:i for i,v in enumerate([
@@ -127,6 +133,7 @@ class RedGymEnv(Env):
             self.pyboy.load_state(f)
 
         self.init_map_mem()
+        self.init_rnd()
 
         self.agent_stats = []
 
@@ -167,6 +174,25 @@ class RedGymEnv(Env):
     def init_map_mem(self):
         self.seen_coords = {}
 
+    def init_rnd(self):
+        in_features = self.output_shape[0] * self.output_shape[1]
+        self.rnd_target = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(in_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+        )
+        for p in self.rnd_target.parameters():
+            p.requires_grad = False
+        self.rnd_predictor = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(in_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+        )
+        self.rnd_optimizer = torch.optim.Adam(self.rnd_predictor.parameters(), lr=1e-4)
+        self.intrinsic_reward = 0.0
+
     def render(self, reduce_res=True):
         game_pixels_render = self.pyboy.screen.ndarray[:,:,0:1]  # (144, 160, 3)
         if reduce_res:
@@ -180,6 +206,7 @@ class RedGymEnv(Env):
         screen = self.render()
 
         self.update_recent_screens(screen)
+        self.update_intrinsic_reward(screen)
         
         # normalize to approx 0-1
         level_sum = 0.02 * sum([
@@ -385,6 +412,18 @@ class RedGymEnv(Env):
         self.recent_actions = np.roll(self.recent_actions, 1)
         self.recent_actions[0] = action
 
+    def update_intrinsic_reward(self, screen):
+        x = torch.tensor(screen, dtype=torch.float32, device=self.rnd_predictor[0].weight.device) / 255.0
+        x = x.view(1, -1)
+        with torch.no_grad():
+            target = self.rnd_target(x)
+        pred = self.rnd_predictor(x)
+        loss = F.mse_loss(pred, target)
+        self.rnd_optimizer.zero_grad()
+        loss.backward()
+        self.rnd_optimizer.step()
+        self.intrinsic_reward = loss.item()
+
     def update_reward(self):
         # compute reward
         self.progress_reward = self.get_game_state_reward()
@@ -516,13 +555,14 @@ class RedGymEnv(Env):
         # https://github.com/pret/pokered/blob/91dc3c9f9c8fd529bb6e8307b58b96efa0bec67e/constants/event_constants.asm
         state_scores = {
             "event": self.reward_scale * self.update_max_event_rew() * 4,
-            #"level": self.reward_scale * self.get_levels_reward(),
+            "level": self.reward_scale * self.get_levels_reward(),
             "heal": self.reward_scale * self.total_healing_rew * 10,
-            #"op_lvl": self.reward_scale * self.update_max_op_level() * 0.2,
-            #"dead": self.reward_scale * self.died_count * -0.1,
+            "op_lvl": self.reward_scale * self.update_max_op_level() * 0.2,
+            "dead": self.reward_scale * self.died_count * -0.1,
             "badge": self.reward_scale * self.get_badges() * 10,
             "explore": self.reward_scale * self.explore_weight * len(self.seen_coords) * 0.1,
-            "stuck": self.reward_scale * self.get_current_coord_count_reward() * -0.05
+            "stuck": self.reward_scale * self.get_current_coord_count_reward() * -0.05,
+            "intrinsic": self.reward_scale * self.intrinsic_reward * 20,
         }
 
         return state_scores
